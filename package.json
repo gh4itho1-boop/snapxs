@@ -1,0 +1,14 @@
+{
+  "name": "snapchat-selfbot",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "body-parser": "^1.20.5",
+    "express": "^4.22.2",
+    "puppeteer": "^21.11.0"
+  }
+}
