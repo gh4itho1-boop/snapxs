@@ -99,32 +99,29 @@ async function clickVisibleButton(page, keywords) {
 }
 
 async function findAndType(page, value, fieldType) {
-  await randomDelay(500, 1000);
+  await delay(500);
 
-  const sel = await page.evaluate((ft) => {
+  const result = await page.evaluate((ft) => {
     const allInputs = Array.from(document.querySelectorAll('input, textarea'));
+    const visibleInputs = allInputs.filter(el => el.offsetParent !== null);
 
-    const isVisible = (el) => {
-      const rect = el.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
+    const buildSelector = (input) => {
+      if (input.id) return `#${input.id}`;
+      if (input.name) return `input[name="${input.name}"]`;
+      if (input.placeholder) return `input[placeholder="${input.placeholder}"]`;
+      return `input[type="${input.type || 'text'}"]`;
     };
-
-    const visibleInputs = allInputs.filter(isVisible);
 
     for (const input of visibleInputs) {
       const type = (input.type || '').toLowerCase();
       if (type === 'hidden' || type === 'submit') continue;
 
-      if (ft === 'password') {
-        if (type === 'password') return { selector: 'input[type="password"]', found: true };
-        continue;
+      if (ft === 'password' && type === 'password') {
+        return { sel: buildSelector(input), ok: true };
       }
 
-      if (ft === 'code') {
-        if (type !== 'password' && (type === 'text' || type === 'number' || type === 'tel' || type === '')) {
-          return { selector: input.id ? `#${input.id}` : input.name ? `input[name="${input.name}"]` : 'input[type="text"]', found: true };
-        }
-        continue;
+      if (ft === 'code' && type !== 'password' && (type === 'text' || type === 'number' || type === 'tel' || type === '')) {
+        return { sel: buildSelector(input), ok: true };
       }
 
       if (ft === 'username') {
@@ -132,60 +129,53 @@ async function findAndType(page, value, fieldType) {
         const name = (input.name || '').toLowerCase();
         const id = (input.id || '').toLowerCase();
         const placeholder = (input.placeholder || '').toLowerCase();
-        const autocomplete = (input.getAttribute('autocomplete') || '').toLowerCase();
         const ariaLabel = (input.getAttribute('aria-label') || '').toLowerCase();
-        const className = (input.className || '').toLowerCase();
 
-        if (name.includes('username') || name.includes('email') || name.includes('account') || name.includes('identifier') ||
+        if (name.includes('identifier') || name.includes('username') || name.includes('email') || name.includes('account') ||
+            name.includes('text') || name.includes('phone') ||
             id.includes('username') || id.includes('email') || id.includes('account') || id.includes('identifier') ||
             placeholder.includes('username') || placeholder.includes('email') || placeholder.includes('phone') ||
-            autocomplete.includes('username') || autocomplete.includes('email') ||
-            ariaLabel.includes('username') || ariaLabel.includes('email') || ariaLabel.includes('phone') ||
-            className.includes('username') || className.includes('email')) {
-          return { selector: input.id ? `#${input.id}` : input.name ? `input[name="${input.name}"]` : 'input[type="text"]', found: true };
+            ariaLabel.includes('username') || ariaLabel.includes('email') || ariaLabel.includes('phone')) {
+          return { sel: buildSelector(input), ok: true };
         }
       }
     }
 
     if (ft === 'username') {
-      const firstText = visibleInputs.find(i => {
+      const first = visibleInputs.find(i => {
         const t = (i.type || '').toLowerCase();
-        return t !== 'hidden' && t !== 'submit' && t !== 'password' && t !== 'checkbox' && t !== 'radio';
+        return t !== 'hidden' && t !== 'submit' && t !== 'password' && t !== 'checkbox' && t !== 'radio' && t !== 'file';
       });
-      if (firstText) {
-        return { selector: firstText.id ? `#${firstText.id}` : firstText.name ? `input[name="${firstText.name}"]` : 'input[type="text"]', found: true };
-      }
+      if (first) return { sel: buildSelector(first), ok: true };
     }
 
     if (ft === 'password') {
       const pw = visibleInputs.find(i => i.type === 'password');
-      if (pw) return { selector: 'input[type="password"]', found: true };
+      if (pw) return { sel: buildSelector(pw), ok: true };
     }
 
     if (ft === 'code') {
-      const codeInput = visibleInputs.find(i => {
+      const code = visibleInputs.find(i => {
         const t = (i.type || '').toLowerCase();
         return t !== 'hidden' && t !== 'submit' && t !== 'password';
       });
-      if (codeInput) {
-        return { selector: codeInput.id ? `#${codeInput.id}` : codeInput.name ? `input[name="${codeInput.name}"]` : 'input[type="text"]', found: true };
-      }
+      if (code) return { sel: buildSelector(code), ok: true };
     }
 
-    return { selector: null, found: false };
+    return { sel: null, ok: false };
   }, fieldType);
 
-  if (!sel || !sel.found || !sel.selector) return false;
+  if (!result.ok || !result.sel) return false;
 
   try {
-    await page.waitForSelector(sel.selector, { visible: true, timeout: 5000 });
+    await page.waitForSelector(result.sel, { visible: true, timeout: 3000 });
   } catch {
     return false;
   }
 
-  await page.click(sel.selector, { clickCount: 3 });
-  await randomDelay(100, 300);
-  await page.type(sel.selector, value, { delay: 40 + Math.random() * 80 });
+  await page.click(result.sel, { clickCount: 3 });
+  await delay(200);
+  await page.type(result.sel, value, { delay: 40 + Math.random() * 80 });
   return true;
 }
 
@@ -230,10 +220,11 @@ async function getLoginError(page) {
       if (el && el.textContent.trim()) return el.textContent.trim();
     }
     const text = document.body.innerText.toLowerCase();
+    if (text.includes('temporarily disabled')) return 'Access temporarily disabled. Try again later.';
     if (text.includes('incorrect password')) return 'Incorrect username or password';
     if (text.includes('account locked')) return 'Account is locked';
     if (text.includes('account suspended')) return 'Account is suspended';
-    if (text.includes('rate limited') || text.includes('too many attempts')) return 'Too many attempts. Try again later.';
+    if (text.includes('rate limited') || text.includes('too many attempts') || text.includes('unusual activity')) return 'Too many attempts. Try again later.';
     if (text.includes('invalid username') || text.includes('invalid email')) return 'Invalid username or email';
     if (text.includes('wrong password')) return 'Wrong password';
     if (text.includes('user not found')) return 'User not found';
@@ -253,41 +244,63 @@ app.post('/api/login', async (req, res) => {
     const page = await browser.newPage();
     await humanizePage(page);
 
-    await page.goto('https://accounts.snapchat.com/v2/login', {
-      waitUntil: 'networkidle2',
+    await page.goto('https://accounts.snapchat.com/accounts/v2/login', {
+      waitUntil: 'domcontentloaded',
       timeout: 30000,
     });
 
-    await randomDelay(3000, 5000);
+    await delay(5000);
     await acceptCookies(page);
-    await randomDelay(500, 1000);
+
+    const rateLimited = await page.evaluate(() => {
+      return document.body.innerText.toLowerCase().includes('temporarily disabled') ||
+             document.body.innerText.toLowerCase().includes('rate limit') ||
+             document.body.innerText.toLowerCase().includes('unusual activity');
+    });
+
+    if (rateLimited) {
+      await browser.close();
+      return res.json({ success: false, error: 'Snapchat is rate limiting this IP. Try again in a few minutes or use a different network.' });
+    }
+
+    await delay(2000);
 
     let typedUsername = await findAndType(page, username, 'username');
 
     if (!typedUsername) {
-      await randomDelay(2000, 3000);
+      await delay(3000);
       typedUsername = await findAndType(page, username, 'username');
     }
 
     if (!typedUsername) {
       await browser.close();
-      return res.json({ success: false, error: 'Could not find username input on Snapchat login page. The page may have changed.' });
+      return res.json({ success: false, error: 'Could not find username input on the page.' });
     }
 
-    await randomDelay(500, 1000);
+    await delay(800);
 
-    const clickedNext = await clickVisibleButton(page, ['next', 'continue', 'log in', 'login', 'sign in', 'signin', 'submit', 'arrow_forward', 'arrow', 'go']);
+    let clickedNext = await clickVisibleButton(page, ['next', 'continue', 'arrow_forward']);
     if (!clickedNext) {
       await page.keyboard.press('Enter');
     }
 
-    await randomDelay(4000, 6000);
+    await delay(6000);
 
     const currentUrl = page.url();
 
     if (currentUrl.includes('web.snapchat.com') || currentUrl.includes('/accounts/welcome') || currentUrl.includes('/accounts/home')) {
       await browser.close();
       return res.json({ success: true, message: 'Login successful!', displayName: username });
+    }
+
+    const rateLimited2 = await page.evaluate(() => {
+      return document.body.innerText.toLowerCase().includes('temporarily disabled') ||
+             document.body.innerText.toLowerCase().includes('rate limit');
+    });
+
+    if (rateLimited2) {
+      await browser.close();
+      return res.json({ success: false, error: 'Rate limited after username. Try again later.' });
     }
 
     const onPasswordPage = await isOnPasswordPage(page);
@@ -308,17 +321,17 @@ app.post('/api/login', async (req, res) => {
     const typedPassword = await findAndType(page, password, 'password');
     if (!typedPassword) {
       await browser.close();
-      return res.json({ success: false, error: 'Could not find password input on Snapchat page.' });
+      return res.json({ success: false, error: 'Could not find password input.' });
     }
 
-    await randomDelay(500, 1000);
+    await delay(800);
 
-    const clickedLogin = await clickVisibleButton(page, ['log in', 'login', 'sign in', 'signin', 'submit', 'continue', 'next', 'done', 'go']);
+    let clickedLogin = await clickVisibleButton(page, ['log in', 'login', 'sign in', 'submit', 'continue']);
     if (!clickedLogin) {
       await page.keyboard.press('Enter');
     }
 
-    await randomDelay(6000, 9000);
+    await delay(8000);
 
     const finalUrl = page.url();
 
@@ -356,7 +369,7 @@ app.post('/api/login', async (req, res) => {
 
     const errorText = await getLoginError(page);
     await browser.close();
-    return res.json({ success: false, error: errorText || 'Login failed. Check your credentials.' });
+    return res.json({ success: false, error: errorText || 'Login failed.' });
 
   } catch (err) {
     if (browser) await browser.close().catch(() => {});
