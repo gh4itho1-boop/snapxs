@@ -1,49 +1,73 @@
 import express from 'express';
-import bodyParser from 'body-parser';
-import puppeteer from 'puppeteer';
+import axios from 'axios';
+import { WebSocketServer } from 'ws';
+import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { CookieJar } from 'tough-cookie';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json());
+
+const publicPath = path.join(__dirname, 'public');
+app.use(express.static(publicPath));
+
+app.get('/', (req, res) => {
+  res.sendFile(path.join(publicPath, 'overall.js'));
+});
 
 const sessions = new Map();
 let sessionCounter = 0;
 
-function humanDelay(min, max) {
-  return new Promise(r => setTimeout(r, min + Math.random() * (max - min)));
+function humanDelay(ms) {
+  return new Promise(r => setTimeout(r, ms + Math.random() * 500));
 }
 
-async function createBrowser() {
-  return puppeteer.launch({
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--disable-gpu',
-      '--window-size=1366,768',
-      '--disable-blink-features=AutomationControlled',
-    ],
+function createAxiosClient() {
+  const jar = new CookieJar();
+  const client = axios.create({
+    timeout: 30000,
+    maxRedirects: 10,
+    validateStatus: () => true,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Connection': 'keep-alive',
+      'Cache-Control': 'max-age=0',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
+      'Upgrade-Insecure-Requests': '1',
+    },
   });
-}
 
-async function humanizePage(page) {
-  await page.setViewport({ width: 1366, height: 768 });
-  await page.setUserAgent(
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-  );
-  await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-    window.chrome = { runtime: {} };
+  client.interceptors.request.use(async (config) => {
+    const cookies = await jar.getCookies(config.url || 'https://accounts.snapchat.com');
+    if (cookies.length > 0) {
+      config.headers['Cookie'] = cookies.map(c => `${c.key}=${c.value}`).join('; ');
+    }
+    return config;
   });
+
+  client.interceptors.response.use(async (response) => {
+    const setCookie = response.headers['set-cookie'];
+    if (setCookie) {
+      for (const cookie of setCookie) {
+        try {
+          await jar.setCookie(cookie, response.config.url || 'https://accounts.snapchat.com');
+        } catch {}
+      }
+    }
+    return response;
+  });
+
+  return { client, jar };
 }
 
 app.post('/api/login', async (req, res) => {
@@ -52,115 +76,88 @@ app.post('/api/login', async (req, res) => {
     return res.json({ success: false, error: 'Username and password required' });
   }
 
-  let browser;
   try {
-    browser = await createBrowser();
-    const page = await browser.newPage();
-    await humanizePage(page);
+    const { client, jar } = createAxiosClient();
 
-    await page.goto('https://accounts.snapchat.com/accounts/login', {
-      waitUntil: 'networkidle2',
-      timeout: 30000,
+    const getResp = await client.get('https://accounts.snapchat.com/accounts/login');
+    await humanDelay(800);
+
+    const xsrfMatch = getResp.data.match(/name="xsrf_token"[^>]*value="([^"]+)"/);
+    const reqTokenMatch = getResp.data.match(/name="req_token"[^>]*value="([^"]+)"/);
+    const xsrfToken = xsrfMatch ? xsrfMatch[1] : '';
+    const reqToken = reqTokenMatch ? reqTokenMatch[1] : '';
+
+    await humanDelay(600);
+
+    const postData = new URLSearchParams();
+    postData.append('username', username);
+    postData.append('password', password);
+    postData.append('xsrf_token', xsrfToken);
+    if (reqToken) postData.append('req_token', reqToken);
+
+    const loginResp = await client.post('https://accounts.snapchat.com/accounts/login', postData, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': 'https://accounts.snapchat.com/accounts/login',
+        'Origin': 'https://accounts.snapchat.com',
+      },
     });
 
-    await humanDelay(800, 1500);
+    await humanDelay(1000);
 
-    await page.waitForSelector('input[name="username"]', { visible: true, timeout: 15000 });
+    const responseData = loginResp.data;
+    const responseUrl = loginResp.request?.res?.responseUrl || '';
 
-    await page.click('input[name="username"]', { clickCount: 3 });
-    await page.type('input[name="username"]', username, { delay: 80 + Math.random() * 120 });
-
-    await humanDelay(400, 800);
-
-    await page.click('input[name="password"]', { clickCount: 3 });
-    await page.type('input[name="password"]', password, { delay: 80 + Math.random() * 120 });
-
-    await humanDelay(300, 600);
-
-    const loginBtn = await page.$('button[type="submit"]');
-    if (loginBtn) {
-      await loginBtn.click();
-    } else {
-      await page.keyboard.press('Enter');
+    if (responseUrl.includes('web.snapchat.com') || responseUrl.includes('/accounts/welcome')) {
+      return res.json({ success: true, message: 'Login successful!', displayName: username });
     }
 
-    await humanDelay(4000, 6000);
+    if (typeof responseData === 'string') {
+      const lower = responseData.toLowerCase();
 
-    const currentUrl = page.url();
-
-    if (currentUrl.includes('accounts.snapchat.com/accounts/login')) {
-      const otpInput = await page.$('input[name="code"], input[data-testid="otp-input"], input[placeholder*="code" i], input[placeholder*="verification" i]').catch(() => null);
-      const otpPrompt = await page.evaluate(() => {
-        const text = document.body.innerText.toLowerCase();
-        return text.includes('verification code') || text.includes('two-factor') || text.includes('2fa') || text.includes('authenticate') || text.includes('security code');
-      });
-
-      if (otpInput || otpPrompt) {
+      if (lower.includes('verification code') || lower.includes('two-factor') || lower.includes('2fa') || lower.includes('otp') || lower.includes('security code') || lower.includes('authenticate')) {
         const sessionId = ++sessionCounter;
-        sessions.set(sessionId, { browser, page, username });
+        sessions.set(sessionId, { client, jar, username });
 
         setTimeout(() => {
           const s = sessions.get(sessionId);
-          if (s) {
-            sessions.delete(sessionId);
-            s.browser.close().catch(() => {});
-          }
+          if (s) sessions.delete(sessionId);
         }, 300000);
 
         return res.json({
           success: false,
           needsVerification: true,
           sessionId: sessionId,
-          message: 'Verification code required. Check your email/SMS and enter the code.',
+          message: 'Verification code required. Check your email or SMS and enter the code below.',
         });
       }
 
-      const errorText = await page.evaluate(() => {
-        const selectors = ['.error-msg', '.alert-danger', '[data-testid="error-message"]', '.form-error', '.notification-error', '.error-text'];
-        for (const sel of selectors) {
-          const el = document.querySelector(sel);
-          if (el && el.textContent.trim()) return el.textContent.trim();
-        }
-        return null;
-      });
-
-      await browser.close();
-
-      if (errorText) {
-        const lower = errorText.toLowerCase();
-        if (lower.includes('incorrect') || lower.includes('wrong') || lower.includes('invalid')) {
-          return res.json({ success: false, error: 'Incorrect username or password' });
-        }
-        if (lower.includes('locked') || lower.includes('suspended') || lower.includes('disabled')) {
-          return res.json({ success: false, error: 'Account is locked or suspended' });
-        }
-        return res.json({ success: false, error: errorText });
+      if (lower.includes('incorrect') || lower.includes('invalid password') || lower.includes('wrong password')) {
+        return res.json({ success: false, error: 'Incorrect username or password' });
       }
-
-      return res.json({ success: false, error: 'Login failed. Please check your credentials.' });
+      if (lower.includes('locked') || lower.includes('suspended') || lower.includes('disabled') || lower.includes('banned')) {
+        return res.json({ success: false, error: 'Account is locked or suspended' });
+      }
+      if (lower.includes('rate limit') || lower.includes('too many')) {
+        return res.json({ success: false, error: 'Rate limited. Try again later.' });
+      }
     }
 
-    if (currentUrl.includes('web.snapchat.com') || currentUrl.includes('accounts.snapchat.com/accounts/welcome')) {
-      const displayName = await page.evaluate(() => {
-        const el = document.querySelector('[data-testid="user-display-name"], .user-name, [class*="displayName"], [class*="account-name"]');
-        return el ? el.textContent.trim() : null;
-      }).catch(() => null);
+    if (loginResp.status >= 200 && loginResp.status < 400) {
+      const cookies = await jar.getCookies('https://accounts.snapchat.com');
+      const hasAuthCookie = cookies.some(c =>
+        c.key.includes('auth') || c.key.includes('sc_a') || c.key.includes('session') || c.key.includes('token')
+      );
 
-      await browser.close();
-
-      return res.json({
-        success: true,
-        message: 'Login successful!',
-        displayName: displayName || username,
-      });
+      if (hasAuthCookie) {
+        return res.json({ success: true, message: 'Login successful!', displayName: username });
+      }
     }
 
-    await browser.close();
-    return res.json({ success: false, error: 'Unexpected redirect: ' + currentUrl });
+    return res.json({ success: false, error: 'Login failed. Please check your credentials.' });
 
   } catch (err) {
-    if (browser) await browser.close().catch(() => {});
-    return res.json({ success: false, error: err.message || 'Unknown error' });
+    return res.json({ success: false, error: err.message || 'Network error' });
   }
 });
 
@@ -170,95 +167,68 @@ app.post('/api/verify', async (req, res) => {
     return res.json({ success: false, error: 'Session ID and verification code required' });
   }
 
-  const session = sessions.get(sessionId);
+  const session = sessions.get(parseInt(sessionId));
   if (!session) {
-    return res.json({ success: false, error: 'Session expired or not found. Please login again.' });
+    return res.json({ success: false, error: 'Session expired. Please login again.' });
   }
 
   try {
-    const { browser, page } = session;
+    const { client } = session;
 
-    const otpInput = await page.$('input[name="code"], input[data-testid="otp-input"], input[placeholder*="code" i], input[placeholder*="verification" i]').catch(() => null);
+    const verifyData = new URLSearchParams();
+    verifyData.append('code', code);
 
-    if (otpInput) {
-      await otpInput.click({ clickCount: 3 });
-      await humanDelay(200, 400);
-      await otpInput.type(code, { delay: 100 + Math.random() * 80 });
-    } else {
-      const allInputs = await page.$$('input');
-      for (const input of allInputs) {
-        const type = await input.evaluate(el => el.type || el.getAttribute('type'));
-        const placeholder = await input.evaluate(el => el.placeholder || '');
-        if (type === 'text' || type === 'number' || placeholder.toLowerCase().includes('code')) {
-          await input.click({ clickCount: 3 });
-          await humanDelay(200, 400);
-          await input.type(code, { delay: 100 + Math.random() * 80 });
-          break;
-        }
+    const verifyResp = await client.post('https://accounts.snapchat.com/accounts/otp', verifyData, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': 'https://accounts.snapchat.com/accounts/login',
+        'Origin': 'https://accounts.snapchat.com',
+      },
+    });
+
+    sessions.delete(parseInt(sessionId));
+
+    const responseUrl = verifyResp.request?.res?.responseUrl || '';
+    const responseData = verifyResp.data;
+
+    if (responseUrl.includes('web.snapchat.com') || responseUrl.includes('/accounts/welcome') || !responseUrl.includes('login')) {
+      return res.json({ success: true, message: 'Login successful! Code accepted.', displayName: session.username });
+    }
+
+    if (typeof responseData === 'string') {
+      const lower = responseData.toLowerCase();
+      if (lower.includes('invalid') || lower.includes('incorrect') || lower.includes('wrong')) {
+        return res.json({ success: false, error: 'Invalid verification code.' });
+      }
+      if (lower.includes('expired')) {
+        return res.json({ success: false, error: 'Code expired. Please login again.' });
       }
     }
 
-    await humanDelay(400, 700);
-
-    const submitBtn = await page.$('button[type="submit"], button[class*="primary"], button[class*="submit"]');
-    if (submitBtn) {
-      await submitBtn.click();
-    } else {
-      await page.keyboard.press('Enter');
-    }
-
-    await humanDelay(5000, 7000);
-
-    const currentUrl = page.url();
-
-    sessions.delete(sessionId);
-
-    if (currentUrl.includes('web.snapchat.com') || currentUrl.includes('accounts.snapchat.com/accounts/welcome') || !currentUrl.includes('login')) {
-      const displayName = await page.evaluate(() => {
-        const el = document.querySelector('[data-testid="user-display-name"], .user-name, [class*="displayName"], [class*="account-name"]');
-        return el ? el.textContent.trim() : null;
-      }).catch(() => null);
-
-      await browser.close();
-
-      return res.json({
-        success: true,
-        message: 'Login successful! Verification code accepted.',
-        displayName: displayName || session.username,
-      });
-    }
-
-    if (currentUrl.includes('accounts.snapchat.com/accounts/login')) {
-      const errorText = await page.evaluate(() => {
-        const selectors = ['.error-msg', '.alert-danger', '[data-testid="error-message"]', '.form-error'];
-        for (const sel of selectors) {
-          const el = document.querySelector(sel);
-          if (el && el.textContent.trim()) return el.textContent.trim();
-        }
-        return null;
-      });
-
-      await browser.close();
-
-      if (errorText) {
-        return res.json({ success: false, error: 'Verification failed: ' + errorText });
-      }
-
-      return res.json({ success: false, error: 'Invalid verification code. Please try again.' });
-    }
-
-    await browser.close();
-    return res.json({ success: true, message: 'Login appears successful!', displayName: session.username });
+    return res.json({ success: true, message: 'Login completed!', displayName: session.username });
 
   } catch (err) {
-    sessions.delete(sessionId);
-    await session.browser.close().catch(() => {});
-    return res.json({ success: false, error: err.message || 'Error during verification' });
+    sessions.delete(parseInt(sessionId));
+    return res.json({ success: false, error: err.message || 'Verification error' });
   }
 });
 
 export function startServer(port) {
-  app.listen(port, () => {
+  const server = http.createServer(app);
+
+  const wss = new WebSocketServer({ server });
+  wss.on('connection', (ws) => {
+    ws.on('message', (msg) => {
+      try {
+        const data = JSON.parse(msg);
+        if (data.type === 'ping') {
+          ws.send(JSON.stringify({ type: 'pong' }));
+        }
+      } catch {}
+    });
+  });
+
+  server.listen(port, () => {
     console.log(`Snapchat Selfbot running on http://localhost:${port}`);
   });
 }
