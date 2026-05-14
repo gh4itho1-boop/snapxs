@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Snapchat Selfbot</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a0f;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container {
+      width: 100%;
+      max-width: 420px;
+    }
+    .logo {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    .logo-icon {
+      width: 64px;
+      height: 64px;
+      background: #FFFC00;
+      border-radius: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 16px;
+    }
+    .logo-icon svg { width: 36px; height: 36px; }
+    .logo h1 {
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    .logo p {
+      color: #666;
+      font-size: 13px;
+      margin-top: 4px;
+    }
+    .card {
+      background: #12121a;
+      border: 1px solid #1e1e2e;
+      border-radius: 16px;
+      padding: 32px;
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    .form-group label {
+      display: block;
+      font-size: 13px;
+      color: #888;
+      margin-bottom: 8px;
+      font-weight: 500;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 12px 16px;
+      background: #1a1a25;
+      border: 1px solid #2a2a3a;
+      border-radius: 10px;
+      color: #fff;
+      font-size: 15px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .form-group input:focus {
+      border-color: #FFFC00;
+    }
+    .form-group input::placeholder {
+      color: #444;
+    }
+    .btn {
+      width: 100%;
+      padding: 14px;
+      background: #FFFC00;
+      color: #000;
+      border: none;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .btn:hover { background: #e6e300; }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .btn-secondary {
+      background: #1a1a25;
+      color: #fff;
+      border: 1px solid #2a2a3a;
+    }
+    .btn-secondary:hover { background: #222230; }
+    .alert {
+      padding: 14px 16px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+      font-size: 13px;
+      display: none;
+    }
+    .alert.show { display: block; }
+    .alert-success {
+      background: rgba(34, 197, 94, 0.1);
+      border: 1px solid rgba(34, 197, 94, 0.2);
+      color: #4ade80;
+    }
+    .alert-error {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      color: #f87171;
+    }
+    .alert-info {
+      background: rgba(59, 130, 246, 0.1);
+      border: 1px solid rgba(59, 130, 246, 0.2);
+      color: #60a5fa;
+    }
+    .hidden { display: none !important; }
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid transparent;
+      border-top-color: currentColor;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .divider {
+      height: 1px;
+      background: #1e1e2e;
+      margin: 24px 0;
+    }
+    .accounts-list {
+      margin-top: 24px;
+    }
+    .accounts-list h3 {
+      font-size: 13px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 12px;
+    }
+    .account-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: #1a1a25;
+      border: 1px solid #2a2a3a;
+      border-radius: 10px;
+      margin-bottom: 8px;
+    }
+    .account-item .name {
+      font-weight: 500;
+      font-size: 14px;
+    }
+    .account-item .status {
+      font-size: 11px;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-weight: 500;
+    }
+    .status-pending { background: rgba(251, 191, 36, 0.1); color: #fbbf24; }
+    .status-success { background: rgba(34, 197, 94, 0.1); color: #4ade80; }
+    .status-error { background: rgba(239, 68, 68, 0.1); color: #f87171; }
+    .status-validating { background: rgba(59, 130, 246, 0.1); color: #60a5fa; }
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: #555;
+    }
+    .empty-state svg {
+      width: 48px;
+      height: 48px;
+      margin-bottom: 12px;
+      opacity: 0.3;
+    }
+    .delete-btn {
+      background: none;
+      border: none;
+      color: #555;
+      cursor: pointer;
+      padding: 4px;
+      margin-left: 8px;
+      transition: color 0.2s;
+    }
+    .delete-btn:hover { color: #ef4444; }
+    .section-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">
+      <div class="logo-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 10h.01" stroke="#000"/>
+          <path d="M15 10h.01" stroke="#000"/>
+          <path d="M12 2a8 8 0 0 0-8 8v1.5c0 1.5-.5 2.5-1 3.5s1 1.5 2 2c1 .5 2 1 3 1.5 1 .5 2 1.5 2 2.5 0 0 1-1 2-2.5s1.5-1 2.5-1.5c1-.5 2-1 2-2s-1-2-1-3.5V10a8 8 0 0 0-8-8z" stroke="#000"/>
+        </svg>
+      </div>
+      <h1>Snapchat Selfbot</h1>
+      <p>Account Login & Validation</p>
+    </div>
+
+    <div class="card">
+      <!-- Login Form -->
+      <div id="loginForm">
+        <div class="section-title">Login</div>
+
+        <div id="alertBox" class="alert"></div>
+
+        <div class="form-group">
+          <label>Username</label>
+          <input type="text" id="username" placeholder="snapchat_username" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="password" placeholder="Enter your password">
+        </div>
+
+        <button class="btn" id="loginBtn" onclick="doLogin()">
+          <span>Login</span>
+        </button>
+      </div>
+
+      <!-- Verification Form (hidden by default) -->
+      <div id="verifyForm" class="hidden">
+        <div class="section-title">Verification Code</div>
+
+        <div id="verifyAlert" class="alert"></div>
+
+        <p style="color: #888; font-size: 13px; margin-bottom: 16px;">
+          A verification code was sent to your email or phone. Enter it below to complete login.
+        </p>
+
+        <div class="form-group">
+          <label>Verification Code</label>
+          <input type="text" id="verifyCode" placeholder="000000" autocomplete="off" maxlength="8">
+        </div>
+
+        <button class="btn" id="verifyBtn" onclick="doVerify()">
+          <span>Verify & Login</span>
+        </button>
+
+        <div style="margin-top: 12px;">
+          <button class="btn btn-secondary" onclick="cancelVerify()">
+            <span>Cancel</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Success View (hidden by default) -->
+      <div id="successView" class="hidden">
+        <div style="text-align: center; padding: 20px 0;">
+          <div style="width: 56px; height: 56px; background: rgba(34,197,94,0.1); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 16px;">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          </div>
+          <h3 style="font-size: 18px; font-weight: 600; margin-bottom: 8px;">Login Successful!</h3>
+          <p id="successName" style="color: #888; font-size: 14px;"></p>
+        </div>
+        <button class="btn" onclick="resetAll()">
+          <span>Login Another Account</span>
+        </button>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Accounts List -->
+      <div class="accounts-list">
+        <h3>Recent Logins</h3>
+        <div id="accountsList">
+          <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M12 2a8 8 0 0 0-8 8v1.5c0 1.5-.5 2.5-1 3.5s1 1.5 2 2c1 .5 2 1 3 1.5 1 .5 2 1.5 2 2.5 0 0 1-1 2-2.5s1.5-1 2.5-1.5c1-.5 2-1 2-2s-1-2-1-3.5V10a8 8 0 0 0-8-8z"/>
+              <circle cx="9" cy="10" r="0.5" fill="currentColor"/>
+              <circle cx="15" cy="10" r="0.5" fill="currentColor"/>
+            </svg>
+            <p>No accounts yet</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentSessionId = null;
+    let accounts = JSON.parse(localStorage.getItem('snapbot_accounts') || '[]');
+
+    function showAlert(elId, message, type) {
+      const el = document.getElementById(elId);
+      el.textContent = message;
+      el.className = 'alert show alert-' + type;
+    }
+    function hideAlert(elId) {
+      document.getElementById(elId).className = 'alert';
+    }
+
+    function setLoading(btnId, loading) {
+      const btn = document.getElementById(btnId);
+      btn.disabled = loading;
+      if (loading) {
+        btn.innerHTML = '<div class="spinner"></div><span>Please wait...</span>';
+      } else {
+        const text = btnId === 'loginBtn' ? 'Login' : 'Verify & Login';
+        btn.innerHTML = '<span>' + text + '</span>';
+      }
+    }
+
+    function renderAccounts() {
+      const list = document.getElementById('accountsList');
+      if (!accounts.length) {
+        list.innerHTML = '<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2a8 8 0 0 0-8 8v1.5c0 1.5-.5 2.5-1 3.5s1 1.5 2 2c1 .5 2 1 3 1.5 1 .5 2 1.5 2 2.5 0 0 1-1 2-2.5s1.5-1 2.5-1.5c1-.5 2-1 2-2s-1-2-1-3.5V10a8 8 0 0 0-8-8z"/><circle cx="9" cy="10" r="0.5" fill="currentColor"/><circle cx="15" cy="10" r="0.5" fill="currentColor"/></svg><p>No accounts yet</p></div>';
+        return;
+      }
+
+      let html = '';
+      accounts.slice().reverse().forEach((acc, i) => {
+        const statusClass = acc.status === 'success' ? 'status-success' :
+                           acc.status === 'error' ? 'status-error' :
+                           acc.status === 'validating' ? 'status-validating' : 'status-pending';
+        const statusText = acc.status === 'success' ? 'Success' :
+                          acc.status === 'error' ? 'Failed' :
+                          acc.status === 'validating' ? 'Validating' : 'Pending';
+        html += '<div class="account-item">' +
+          '<div><div class="name">@' + escapeHtml(acc.username) + '</div>' +
+          (acc.displayName ? '<div style="font-size:12px;color:#666;margin-top:2px;">' + escapeHtml(acc.displayName) + '</div>' : '') +
+          '</div>' +
+          '<div style="display:flex;align-items:center;">' +
+          '<span class="status ' + statusClass + '">' + statusText + '</span>' +
+          '<button class="delete-btn" onclick="deleteAccount(' + i + ')" title="Remove">' +
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
+          '</button></div></div>';
+      });
+      list.innerHTML = html;
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function addAccount(username, status, displayName) {
+      accounts = accounts.filter(a => a.username !== username);
+      accounts.push({ username, status, displayName, time: Date.now() });
+      localStorage.setItem('snapbot_accounts', JSON.stringify(accounts));
+      renderAccounts();
+    }
+
+    function deleteAccount(index) {
+      accounts.splice(index, 1);
+      localStorage.setItem('snapbot_accounts', JSON.stringify(accounts));
+      renderAccounts();
+    }
+
+    async function doLogin() {
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+
+      if (!username || !password) {
+        showAlert('alertBox', 'Please enter both username and password', 'error');
+        return;
+      }
+
+      hideAlert('alertBox');
+      setLoading('loginBtn', true);
+
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        const data = await res.json();
+
+        if (data.needsVerification && data.sessionId) {
+          currentSessionId = data.sessionId;
+          document.getElementById('loginForm').classList.add('hidden');
+          document.getElementById('verifyForm').classList.remove('hidden');
+          showAlert('verifyAlert', data.message, 'info');
+          addAccount(username, 'validating', null);
+        } else if (data.success) {
+          addAccount(username, 'success', data.displayName);
+          showSuccess(data.displayName || username);
+        } else {
+          showAlert('alertBox', data.error || 'Login failed', 'error');
+          addAccount(username, 'error', null);
+        }
+      } catch (err) {
+        showAlert('alertBox', 'Network error: ' + err.message, 'error');
+      }
+
+      setLoading('loginBtn', false);
+    }
+
+    async function doVerify() {
+      const code = document.getElementById('verifyCode').value.trim();
+
+      if (!code) {
+        showAlert('verifyAlert', 'Please enter the verification code', 'error');
+        return;
+      }
+      if (!currentSessionId) {
+        showAlert('verifyAlert', 'Session expired. Please login again.', 'error');
+        return;
+      }
+
+      hideAlert('verifyAlert');
+      setLoading('verifyBtn', true);
+
+      try {
+        const res = await fetch('/api/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: currentSessionId, code }),
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          const username = accounts.length > 0 ? accounts[accounts.length - 1].username : '';
+          addAccount(username, 'success', data.displayName);
+          showSuccess(data.displayName || username);
+        } else {
+          showAlert('verifyAlert', data.error || 'Verification failed', 'error');
+        }
+      } catch (err) {
+        showAlert('verifyAlert', 'Network error: ' + err.message, 'error');
+      }
+
+      setLoading('verifyBtn', false);
+    }
+
+    function showSuccess(name) {
+      document.getElementById('loginForm').classList.add('hidden');
+      document.getElementById('verifyForm').classList.add('hidden');
+      document.getElementById('successView').classList.remove('hidden');
+      document.getElementById('successName').textContent = '@' + name;
+    }
+
+    function resetAll() {
+      currentSessionId = null;
+      document.getElementById('username').value = '';
+      document.getElementById('password').value = '';
+      document.getElementById('verifyCode').value = '';
+      document.getElementById('successView').classList.add('hidden');
+      document.getElementById('verifyForm').classList.add('hidden');
+      document.getElementById('loginForm').classList.remove('hidden');
+      hideAlert('alertBox');
+      hideAlert('verifyAlert');
+    }
+
+    function cancelVerify() {
+      currentSessionId = null;
+      document.getElementById('verifyCode').value = '';
+      document.getElementById('verifyForm').classList.add('hidden');
+      document.getElementById('loginForm').classList.remove('hidden');
+      hideAlert('verifyAlert');
+    }
+
+    document.getElementById('password').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') doLogin();
+    });
+    document.getElementById('verifyCode').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') doVerify();
+    });
+
+    renderAccounts();
+  </script>
+</body>
+</html>
