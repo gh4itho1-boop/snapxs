@@ -12,7 +12,7 @@ app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'overall.js'));
+  res.sendFile(path.join(__dirname, 'public', 'overall.html'));
 });
 
 const sessions = new Map();
