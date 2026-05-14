@@ -24,7 +24,7 @@ function delay(ms) {
 
 async function createBrowser() {
   return puppeteer.launch({
-    headless: true,
+    headless: 'new',
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -134,33 +134,121 @@ app.post('/api/login', async (req, res) => {
     await humanizePage(page);
 
     await page.goto('https://accounts.snapchat.com/accounts/login', {
-      waitUntil: 'networkidle2',
+      waitUntil: 'domcontentloaded',
       timeout: 30000,
     });
 
-    await randomDelay(1000, 2000);
+    await page.waitForFunction(() => {
+      return document.querySelectorAll('input').length >= 2;
+    }, { timeout: 15000 });
 
-    const usernameInput = await page.$('input[name="username"], input#username, input[type="text"]');
-    const passwordInput = await page.$('input[name="password"], input#password, input[type="password"]');
+    await randomDelay(1500, 2500);
 
-    if (!usernameInput || !passwordInput) {
+    const { usernameSelector, passwordSelector } = await page.evaluate(() => {
+      const inputs = Array.from(document.querySelectorAll('input'));
+      let usernameSel = null;
+      let passwordSel = null;
+
+      for (const input of inputs) {
+        const name = (input.name || '').toLowerCase();
+        const id = (input.id || '').toLowerCase();
+        const type = input.type || '';
+        const placeholder = (input.placeholder || '').toLowerCase();
+        const ariaLabel = (input.getAttribute('aria-label') || '').toLowerCase();
+        const className = (input.className || '').toLowerCase();
+
+        if (type === 'password' || name.includes('password') || id.includes('password') || placeholder.includes('password')) {
+          const idx = inputs.indexOf(input);
+          passwordSel = `input:nth-of-type(${idx + 1})`;
+          continue;
+        }
+
+        if (name.includes('username') || name.includes('email') || name.includes('account') ||
+            id.includes('username') || id.includes('email') || id.includes('account') ||
+            placeholder.includes('username') || placeholder.includes('email') || placeholder.includes('phone') ||
+            ariaLabel.includes('username') || ariaLabel.includes('email') ||
+            className.includes('username') || className.includes('email')) {
+          const idx = inputs.indexOf(input);
+          usernameSel = `input:nth-of-type(${idx + 1})`;
+          continue;
+        }
+
+        if (!usernameSel && (type === 'text' || type === 'email' || type === 'tel' || type === '') && !input.value) {
+          const idx = inputs.indexOf(input);
+          usernameSel = `input:nth-of-type(${idx + 1})`;
+        }
+      }
+
+      if (!passwordSel) {
+        const pwInput = inputs.find(i => i.type === 'password');
+        if (pwInput) {
+          const idx = inputs.indexOf(pwInput);
+          passwordSel = `input:nth-of-type(${idx + 1})`;
+        }
+      }
+
+      if (!usernameSel) {
+        const textInputs = inputs.filter(i => i.type === 'text' || i.type === 'email' || i.type === 'tel');
+        if (textInputs.length > 0) {
+          const idx = inputs.indexOf(textInputs[0]);
+          usernameSel = `input:nth-of-type(${idx + 1})`;
+        }
+      }
+
+      return { usernameSelector: usernameSel, passwordSelector: passwordSel };
+    });
+
+    if (!usernameSelector || !passwordSelector) {
+      const html = await page.evaluate(() => document.body.innerHTML.substring(0, 3000));
       await browser.close();
-      return res.json({ success: false, error: 'Could not find login form. Snapchat may have changed their page.' });
+      return res.json({ success: false, error: 'Could not find login form. Snapchat page structure may have changed.' });
     }
 
-    await usernameInput.click({ clickCount: 3 });
+    const usernameEl = await page.$(usernameSelector);
+    const passwordEl = await page.$(passwordSelector);
+
+    if (!usernameEl || !passwordEl) {
+      await browser.close();
+      return res.json({ success: false, error: 'Found selectors but elements not available. Page may not be fully loaded.' });
+    }
+
+    await usernameEl.click({ clickCount: 3 });
     await randomDelay(200, 400);
-    await usernameInput.type(username, { delay: 60 + Math.random() * 100 });
+    await usernameEl.type(username, { delay: 60 + Math.random() * 100 });
 
     await randomDelay(400, 800);
 
-    await passwordInput.click({ clickCount: 3 });
+    await passwordEl.click({ clickCount: 3 });
     await randomDelay(200, 400);
-    await passwordInput.type(password, { delay: 60 + Math.random() * 100 });
+    await passwordEl.type(password, { delay: 60 + Math.random() * 100 });
 
     await randomDelay(300, 600);
 
-    const loginBtn = await page.$('button[type="submit"], button[class*="primary"], button[class*="login"]');
+    const loginBtnSelectors = [
+      'button[type="submit"]',
+      'button[class*="primary"]',
+      'button[class*="login"]',
+      'button[class*="submit"]',
+      'button:not([type="button"])',
+      'button',
+      'input[type="submit"]',
+    ];
+
+    let loginBtn = null;
+    for (const sel of loginBtnSelectors) {
+      const btn = await page.$(sel);
+      if (btn) {
+        const isVisible = await btn.evaluate(el => {
+          const rect = el.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        });
+        if (isVisible) {
+          loginBtn = btn;
+          break;
+        }
+      }
+    }
+
     if (loginBtn) {
       await loginBtn.click();
     } else {
