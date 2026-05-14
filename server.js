@@ -180,13 +180,12 @@ async function findAndType(page, value, fieldType) {
 }
 
 async function isOnPasswordPage(page) {
-  const check = await page.evaluate(() => {
-    const pwInputs = document.querySelectorAll('input[type="password"]');
-    if (pwInputs.length === 0) return false;
-    const text = document.body.innerText.toLowerCase();
-    return text.includes('password') || text.includes('pass');
-  });
-  return check;
+  try {
+    await page.waitForSelector('input[type="password"]', { visible: true, timeout: 3000 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function isOtpPage(page) {
@@ -251,82 +250,76 @@ app.post('/api/login', async (req, res) => {
 
     await delay(5000);
     await acceptCookies(page);
+    await delay(1000);
 
-    const rateLimited = await page.evaluate(() => {
-      return document.body.innerText.toLowerCase().includes('temporarily disabled') ||
-             document.body.innerText.toLowerCase().includes('rate limit') ||
-             document.body.innerText.toLowerCase().includes('unusual activity');
-    });
-
-    if (rateLimited) {
+    const pageText = await page.evaluate(() => document.body.innerText);
+    if (pageText.toLowerCase().includes('temporarily disabled') || pageText.toLowerCase().includes('unusual activity')) {
       await browser.close();
-      return res.json({ success: false, error: 'Snapchat is rate limiting this IP. Try again in a few minutes or use a different network.' });
+      return res.json({ success: false, error: 'Snapchat is rate limiting this IP. Try again later.' });
     }
 
-    await delay(2000);
-
-    let typedUsername = await findAndType(page, username, 'username');
-
-    if (!typedUsername) {
+    // STEP 1: Type username
+    try {
+      await page.waitForSelector('input[name="accountIdentifier"], #username', { visible: true, timeout: 10000 });
+    } catch {
       await delay(3000);
-      typedUsername = await findAndType(page, username, 'username');
+      try {
+        await page.waitForSelector('input[name="accountIdentifier"], #username', { visible: true, timeout: 10000 });
+      } catch {
+        await browser.close();
+        return res.json({ success: false, error: 'Could not find username input on the page.' });
+      }
     }
 
-    if (!typedUsername) {
-      await browser.close();
-      return res.json({ success: false, error: 'Could not find username input on the page.' });
-    }
+    await page.click('input[name="accountIdentifier"], #username', { clickCount: 3 });
+    await delay(200);
+    await page.type('input[name="accountIdentifier"], #username', username, { delay: 60 + Math.random() * 80 });
 
     await delay(800);
 
-    let clickedNext = await clickVisibleButton(page, ['next', 'continue', 'arrow_forward']);
+    // Click Next
+    const clickedNext = await clickVisibleButton(page, ['next', 'continue']);
     if (!clickedNext) {
       await page.keyboard.press('Enter');
     }
 
     await delay(6000);
 
-    const currentUrl = page.url();
-
-    if (currentUrl.includes('web.snapchat.com') || currentUrl.includes('/accounts/welcome') || currentUrl.includes('/accounts/home')) {
+    const midUrl = page.url();
+    if (midUrl.includes('web.snapchat.com') || midUrl.includes('/accounts/welcome') || midUrl.includes('/accounts/home')) {
       await browser.close();
       return res.json({ success: true, message: 'Login successful!', displayName: username });
     }
 
-    const rateLimited2 = await page.evaluate(() => {
-      return document.body.innerText.toLowerCase().includes('temporarily disabled') ||
-             document.body.innerText.toLowerCase().includes('rate limit');
-    });
-
-    if (rateLimited2) {
+    const pageText2 = await page.evaluate(() => document.body.innerText);
+    if (pageText2.toLowerCase().includes('temporarily disabled')) {
       await browser.close();
-      return res.json({ success: false, error: 'Rate limited after username. Try again later.' });
+      return res.json({ success: false, error: 'Rate limited. Try again later.' });
     }
 
-    const onPasswordPage = await isOnPasswordPage(page);
-
-    if (!onPasswordPage && !currentUrl.includes('login') && !currentUrl.includes('accounts')) {
-      await browser.close();
-      return res.json({ success: true, message: 'Login successful!', displayName: username });
-    }
-
-    if (!onPasswordPage) {
-      const errorText = await getLoginError(page);
-      await browser.close();
-      return res.json({ success: false, error: errorText || 'Login failed after username step.' });
+    // STEP 2: Type password
+    try {
+      await page.waitForSelector('input[type="password"]', { visible: true, timeout: 10000 });
+    } catch {
+      await delay(3000);
+      try {
+        await page.waitForSelector('input[type="password"]', { visible: true, timeout: 10000 });
+      } catch {
+        const errText = await getLoginError(page);
+        await browser.close();
+        return res.json({ success: false, error: errText || 'Password page did not load.' });
+      }
     }
 
     await acceptCookies(page);
 
-    const typedPassword = await findAndType(page, password, 'password');
-    if (!typedPassword) {
-      await browser.close();
-      return res.json({ success: false, error: 'Could not find password input.' });
-    }
+    await page.click('input[type="password"]', { clickCount: 3 });
+    await delay(200);
+    await page.type('input[type="password"]', password, { delay: 60 + Math.random() * 80 });
 
     await delay(800);
 
-    let clickedLogin = await clickVisibleButton(page, ['log in', 'login', 'sign in', 'submit', 'continue']);
+    const clickedLogin = await clickVisibleButton(page, ['log in', 'login', 'sign in', 'submit', 'continue']);
     if (!clickedLogin) {
       await page.keyboard.press('Enter');
     }
@@ -391,27 +384,36 @@ app.post('/api/verify', async (req, res) => {
   try {
     const { browser, page, username } = session;
 
-    const typedCode = await findAndType(page, code, 'code');
-    if (!typedCode) {
-      const codeSelector = await page.evaluate(() => {
-        const inputs = document.querySelectorAll('input[type="text"], input[type="number"], input[type="tel"], input:not([type])');
-        for (const input of inputs) {
-          if (input.type !== 'hidden' && input.type !== 'submit' && input.type !== 'password') {
-            return input.id ? `#${input.id}` : `input[type="${input.type || 'text'}"]`;
-          }
-        }
-        return null;
-      });
+    const codeSelectors = [
+      'input[name="code"]',
+      'input[name="otp"]',
+      'input[name="verification_code"]',
+      'input[name="token"]',
+      'input[type="text"]',
+      'input[type="number"]',
+      'input[type="tel"]',
+      'input:not([type])',
+      'input',
+    ];
 
-      if (!codeSelector) {
-        sessions.delete(parseInt(sessionId));
-        await browser.close();
-        return res.json({ success: false, error: 'Could not find verification code input.' });
+    let codeInputFound = false;
+    for (const sel of codeSelectors) {
+      try {
+        await page.waitForSelector(sel, { visible: true, timeout: 2000 });
+        await page.click(sel, { clickCount: 3 });
+        await delay(200);
+        await page.type(sel, code, { delay: 80 + Math.random() * 100 });
+        codeInputFound = true;
+        break;
+      } catch {
+        continue;
       }
+    }
 
-      await page.click(codeSelector, { clickCount: 3 });
-      await randomDelay(100, 300);
-      await page.type(codeSelector, code, { delay: 80 + Math.random() * 100 });
+    if (!codeInputFound) {
+      sessions.delete(parseInt(sessionId));
+      await browser.close();
+      return res.json({ success: false, error: 'Could not find verification code input.' });
     }
 
     await randomDelay(400, 700);
