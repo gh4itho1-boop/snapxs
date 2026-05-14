@@ -99,52 +99,93 @@ async function clickVisibleButton(page, keywords) {
 }
 
 async function findAndType(page, value, fieldType) {
+  await randomDelay(500, 1000);
+
   const sel = await page.evaluate((ft) => {
-    const inputs = document.querySelectorAll('input, textarea');
-    for (const input of inputs) {
+    const allInputs = Array.from(document.querySelectorAll('input, textarea'));
+
+    const isVisible = (el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    };
+
+    const visibleInputs = allInputs.filter(isVisible);
+
+    for (const input of visibleInputs) {
       const type = (input.type || '').toLowerCase();
-      const name = (input.name || '').toLowerCase();
-      const id = (input.id || '').toLowerCase();
-      const placeholder = (input.placeholder || '').toLowerCase();
-      const autocomplete = (input.getAttribute('autocomplete') || '').toLowerCase();
-      const ariaLabel = (input.getAttribute('aria-label') || '').toLowerCase();
+      if (type === 'hidden' || type === 'submit') continue;
 
       if (ft === 'password') {
-        if (type === 'password' || name.includes('password') || id.includes('password') || placeholder.includes('password')) {
-          return input.id ? `#${input.id}` : input.name ? `input[name="${input.name}"]` : `input[type="password"]`;
+        if (type === 'password') return { selector: 'input[type="password"]', found: true };
+        continue;
+      }
+
+      if (ft === 'code') {
+        if (type !== 'password' && (type === 'text' || type === 'number' || type === 'tel' || type === '')) {
+          return { selector: input.id ? `#${input.id}` : input.name ? `input[name="${input.name}"]` : 'input[type="text"]', found: true };
         }
         continue;
       }
 
       if (ft === 'username') {
-        if (type === 'hidden' || type === 'submit' || type === 'password') continue;
-        if (name.includes('username') || name.includes('account') || name.includes('identifier') || name.includes('text') ||
-            id.includes('username') || id.includes('account') || id.includes('identifier') || id.includes('text') ||
+        if (type === 'password') continue;
+        const name = (input.name || '').toLowerCase();
+        const id = (input.id || '').toLowerCase();
+        const placeholder = (input.placeholder || '').toLowerCase();
+        const autocomplete = (input.getAttribute('autocomplete') || '').toLowerCase();
+        const ariaLabel = (input.getAttribute('aria-label') || '').toLowerCase();
+        const className = (input.className || '').toLowerCase();
+
+        if (name.includes('username') || name.includes('email') || name.includes('account') || name.includes('identifier') ||
+            id.includes('username') || id.includes('email') || id.includes('account') || id.includes('identifier') ||
             placeholder.includes('username') || placeholder.includes('email') || placeholder.includes('phone') ||
             autocomplete.includes('username') || autocomplete.includes('email') ||
-            ariaLabel.includes('username') || ariaLabel.includes('email') || ariaLabel.includes('phone')) {
-          return input.id ? `#${input.id}` : input.name ? `input[name="${input.name}"]` : `input[type="${input.type || 'text'}"]`;
-        }
-      }
-
-      if (ft === 'code') {
-        if (type === 'hidden' || type === 'submit' || type === 'password') continue;
-        if (name.includes('code') || name.includes('otp') || name.includes('token') || name.includes('verification') ||
-            id.includes('code') || id.includes('otp') || id.includes('token') || id.includes('verification') ||
-            placeholder.includes('code') || placeholder.includes('verification') || placeholder.includes('digit') ||
-            autocomplete.includes('one-time-code') || autocomplete.includes('otp')) {
-          return input.id ? `#${input.id}` : input.name ? `input[name="${input.name}"]` : `input[type="${input.type || 'text'}"]`;
+            ariaLabel.includes('username') || ariaLabel.includes('email') || ariaLabel.includes('phone') ||
+            className.includes('username') || className.includes('email')) {
+          return { selector: input.id ? `#${input.id}` : input.name ? `input[name="${input.name}"]` : 'input[type="text"]', found: true };
         }
       }
     }
-    return null;
+
+    if (ft === 'username') {
+      const firstText = visibleInputs.find(i => {
+        const t = (i.type || '').toLowerCase();
+        return t !== 'hidden' && t !== 'submit' && t !== 'password' && t !== 'checkbox' && t !== 'radio';
+      });
+      if (firstText) {
+        return { selector: firstText.id ? `#${firstText.id}` : firstText.name ? `input[name="${firstText.name}"]` : 'input[type="text"]', found: true };
+      }
+    }
+
+    if (ft === 'password') {
+      const pw = visibleInputs.find(i => i.type === 'password');
+      if (pw) return { selector: 'input[type="password"]', found: true };
+    }
+
+    if (ft === 'code') {
+      const codeInput = visibleInputs.find(i => {
+        const t = (i.type || '').toLowerCase();
+        return t !== 'hidden' && t !== 'submit' && t !== 'password';
+      });
+      if (codeInput) {
+        return { selector: codeInput.id ? `#${codeInput.id}` : codeInput.name ? `input[name="${codeInput.name}"]` : 'input[type="text"]', found: true };
+      }
+    }
+
+    return { selector: null, found: false };
   }, fieldType);
 
-  if (!sel) return false;
+  if (!sel || !sel.found || !sel.selector) return false;
 
-  await page.click(sel, { clickCount: 3 });
+  try {
+    await page.waitForSelector(sel.selector, { visible: true, timeout: 5000 });
+  } catch {
+    return false;
+  }
+
+  await page.click(sel.selector, { clickCount: 3 });
   await randomDelay(100, 300);
-  await page.type(sel, value, { delay: 40 + Math.random() * 80 });
+  await page.type(sel.selector, value, { delay: 40 + Math.random() * 80 });
   return true;
 }
 
@@ -217,13 +258,20 @@ app.post('/api/login', async (req, res) => {
       timeout: 30000,
     });
 
-    await randomDelay(2000, 3500);
+    await randomDelay(3000, 5000);
     await acceptCookies(page);
+    await randomDelay(500, 1000);
 
-    const typedUsername = await findAndType(page, username, 'username');
+    let typedUsername = await findAndType(page, username, 'username');
+
+    if (!typedUsername) {
+      await randomDelay(2000, 3000);
+      typedUsername = await findAndType(page, username, 'username');
+    }
+
     if (!typedUsername) {
       await browser.close();
-      return res.json({ success: false, error: 'Could not find username input on Snapchat login page.' });
+      return res.json({ success: false, error: 'Could not find username input on Snapchat login page. The page may have changed.' });
     }
 
     await randomDelay(500, 1000);
@@ -405,6 +453,50 @@ app.post('/api/verify', async (req, res) => {
     sessions.delete(parseInt(sessionId));
     await session.browser.close().catch(() => {});
     return res.json({ success: false, error: err.message || 'Error during verification' });
+  }
+});
+
+app.post('/api/debug', async (req, res) => {
+  const { username, password } = req.body;
+  let browser;
+  try {
+    browser = await createBrowser();
+    const page = await browser.newPage();
+    await humanizePage(page);
+
+    await page.goto('https://accounts.snapchat.com/v2/login', {
+      waitUntil: 'networkidle2',
+      timeout: 30000,
+    });
+
+    await randomDelay(4000, 6000);
+    await acceptCookies(page);
+    await randomDelay(1000, 2000);
+
+    const screenshot = await page.screenshot({ encoding: 'base64', fullPage: true });
+    const pageInfo = await page.evaluate(() => {
+      const inputs = Array.from(document.querySelectorAll('input, textarea, button')).map(el => ({
+        tag: el.tagName.toLowerCase(),
+        type: el.type || '',
+        name: el.name || '',
+        id: el.id || '',
+        className: el.className || '',
+        placeholder: el.placeholder || '',
+        text: el.textContent.trim().substring(0, 50),
+        visible: el.getBoundingClientRect().width > 0,
+      }));
+      return {
+        url: location.href,
+        title: document.title,
+        inputs: inputs,
+      };
+    });
+
+    await browser.close();
+    res.json({ success: true, screenshot, pageInfo });
+  } catch (err) {
+    if (browser) await browser.close().catch(() => {});
+    res.json({ success: false, error: err.message });
   }
 });
 
