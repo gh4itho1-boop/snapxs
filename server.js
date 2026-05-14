@@ -134,93 +134,89 @@ app.post('/api/login', async (req, res) => {
     await humanizePage(page);
 
     await page.goto('https://accounts.snapchat.com/accounts/login', {
-      waitUntil: 'domcontentloaded',
+      waitUntil: 'networkidle2',
       timeout: 30000,
     });
 
-    await page.waitForFunction(() => {
-      return document.querySelectorAll('input').length >= 2;
-    }, { timeout: 15000 });
+    await randomDelay(2000, 3500);
 
-    await randomDelay(1500, 2500);
+    const pageContent = await page.content();
+    const hasLoginForm = pageContent.includes('password') || pageContent.includes('login') || pageContent.includes('username');
+    if (!hasLoginForm) {
+      await randomDelay(3000, 5000);
+    }
 
-    const { usernameSelector, passwordSelector } = await page.evaluate(() => {
-      const inputs = Array.from(document.querySelectorAll('input'));
-      let usernameSel = null;
-      let passwordSel = null;
+    const findInputs = await page.evaluate(() => {
+      const allInputs = Array.from(document.querySelectorAll('input, textarea'));
+      let userIdx = -1;
+      let passIdx = -1;
+      let userEl = null;
+      let passEl = null;
 
-      for (const input of inputs) {
-        const name = (input.name || '').toLowerCase();
-        const id = (input.id || '').toLowerCase();
+      for (let i = 0; i < allInputs.length; i++) {
+        const input = allInputs[i];
         const type = input.type || '';
-        const placeholder = (input.placeholder || '').toLowerCase();
-        const ariaLabel = (input.getAttribute('aria-label') || '').toLowerCase();
-        const className = (input.className || '').toLowerCase();
+        const tag = input.tagName.toLowerCase();
 
-        if (type === 'password' || name.includes('password') || id.includes('password') || placeholder.includes('password')) {
-          const idx = inputs.indexOf(input);
-          passwordSel = `input:nth-of-type(${idx + 1})`;
+        if (type === 'password') {
+          passIdx = i;
+          passEl = input;
           continue;
         }
+        if (type === 'hidden' || type === 'submit') continue;
 
-        if (name.includes('username') || name.includes('email') || name.includes('account') ||
-            id.includes('username') || id.includes('email') || id.includes('account') ||
-            placeholder.includes('username') || placeholder.includes('email') || placeholder.includes('phone') ||
-            ariaLabel.includes('username') || ariaLabel.includes('email') ||
-            className.includes('username') || className.includes('email')) {
-          const idx = inputs.indexOf(input);
-          usernameSel = `input:nth-of-type(${idx + 1})`;
-          continue;
-        }
-
-        if (!usernameSel && (type === 'text' || type === 'email' || type === 'tel' || type === '') && !input.value) {
-          const idx = inputs.indexOf(input);
-          usernameSel = `input:nth-of-type(${idx + 1})`;
+        if (userIdx === -1 && (type === 'text' || type === 'email' || type === 'tel' || tag === 'textarea')) {
+          userIdx = i;
+          userEl = input;
         }
       }
 
-      if (!passwordSel) {
-        const pwInput = inputs.find(i => i.type === 'password');
-        if (pwInput) {
-          const idx = inputs.indexOf(pwInput);
-          passwordSel = `input:nth-of-type(${idx + 1})`;
-        }
-      }
+      const userPath = userEl ? {
+        tag: userEl.tagName.toLowerCase(),
+        name: userEl.name || '',
+        id: userEl.id || '',
+        type: userEl.type || '',
+        placeholder: userEl.placeholder || '',
+        className: userEl.className || '',
+      } : null;
 
-      if (!usernameSel) {
-        const textInputs = inputs.filter(i => i.type === 'text' || i.type === 'email' || i.type === 'tel');
-        if (textInputs.length > 0) {
-          const idx = inputs.indexOf(textInputs[0]);
-          usernameSel = `input:nth-of-type(${idx + 1})`;
-        }
-      }
+      const passPath = passEl ? {
+        tag: passEl.tagName.toLowerCase(),
+        name: passEl.name || '',
+        id: passEl.id || '',
+        type: passEl.type || '',
+        className: passEl.className || '',
+      } : null;
 
-      return { usernameSelector: usernameSel, passwordSelector: passwordSel };
+      return { userPath, passPath };
     });
 
-    if (!usernameSelector || !passwordSelector) {
-      const html = await page.evaluate(() => document.body.innerHTML.substring(0, 3000));
+    if (!findInputs.userPath || !findInputs.passPath) {
       await browser.close();
-      return res.json({ success: false, error: 'Could not find login form. Snapchat page structure may have changed.' });
+      return res.json({ success: false, error: 'Could not find login form inputs on the Snapchat page.' });
     }
 
-    const usernameEl = await page.$(usernameSelector);
-    const passwordEl = await page.$(passwordSelector);
+    const buildSelector = (info) => {
+      if (info.id) return `${info.tag}#${info.id}`;
+      if (info.name) return `${info.tag}[name="${info.name}"]`;
+      if (info.placeholder) return `${info.tag}[placeholder="${info.placeholder}"]`;
+      return `${info.tag}[type="${info.type}"]`;
+    };
 
-    if (!usernameEl || !passwordEl) {
-      await browser.close();
-      return res.json({ success: false, error: 'Found selectors but elements not available. Page may not be fully loaded.' });
-    }
+    const userSelector = buildSelector(findInputs.userPath);
+    const passSelector = buildSelector(findInputs.passPath);
 
-    await usernameEl.click({ clickCount: 3 });
+    await randomDelay(300, 600);
+
+    await page.click(userSelector, { clickCount: 3 });
     await randomDelay(200, 400);
-    await usernameEl.type(username, { delay: 60 + Math.random() * 100 });
+    await page.type(userSelector, username, { delay: 60 + Math.random() * 100 });
 
     await randomDelay(400, 800);
 
-    await passwordEl.click({ clickCount: 3 });
+    await page.click(passSelector, { clickCount: 3 });
     await randomDelay(200, 400);
-    await passwordEl.type(password, { delay: 60 + Math.random() * 100 });
+    await page.type(passSelector, password, { delay: 60 + Math.random() * 100 });
 
     await randomDelay(300, 600);
 
@@ -229,6 +225,7 @@ app.post('/api/login', async (req, res) => {
       'button[class*="primary"]',
       'button[class*="login"]',
       'button[class*="submit"]',
+      'button[class*="register"]',
       'button:not([type="button"])',
       'button',
       'input[type="submit"]',
