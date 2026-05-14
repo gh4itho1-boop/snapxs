@@ -22,6 +22,10 @@ function delay(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+async function randomDelay(min, max) {
+  await delay(min + Math.random() * (max - min));
+}
+
 async function createBrowser() {
   return puppeteer.launch({
     headless: 'new',
@@ -31,92 +35,167 @@ async function createBrowser() {
       '--disable-dev-shm-usage',
       '--disable-accelerated-2d-canvas',
       '--disable-gpu',
-      '--window-size=1366,768',
+      '--window-size=390,844',
       '--disable-blink-features=AutomationControlled',
     ],
   });
 }
 
 async function humanizePage(page) {
-  await page.setViewport({ width: 1366, height: 768 });
+  await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
   await page.setUserAgent(
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1'
   );
   await page.evaluateOnNewDocument(() => {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+    Object.defineProperty(navigator, 'plugins', { get: () => [] });
     Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-    window.chrome = { runtime: {} };
-    window.navigator.chrome = { runtime: {} };
+    window.chrome = undefined;
+    Object.defineProperty(navigator, 'platform', { get: () => 'iPhone' });
+    Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 5 });
+    Object.defineProperty(navigator, 'vendor', { get: () => 'Apple Computer, Inc.' });
   });
 }
 
-async function randomDelay(min, max) {
-  await delay(min + Math.random() * (max - min));
+async function acceptCookies(page) {
+  try {
+    await randomDelay(500, 1000);
+    const accepted = await page.evaluate(() => {
+      const texts = ['accept', 'accept all', 'allow all', 'agree', 'ok', 'i accept', 'got it', 'allow', 'continue', 'consent'];
+      const btns = document.querySelectorAll('button, a, [role="button"]');
+      for (const btn of btns) {
+        const text = (btn.textContent || '').toLowerCase().trim();
+        for (const t of texts) {
+          if (text === t || text.includes(t)) {
+            btn.click();
+            return true;
+          }
+        }
+      }
+      return false;
+    });
+    if (accepted) await randomDelay(800, 1500);
+  } catch {}
 }
 
-async function isOtpPage(page) {
-  const url = page.url();
-  const otpIndicators = await page.evaluate(() => {
-    const checks = {
-      hasOtpInput: false,
-      hasCodeInput: false,
-      pageText: '',
-      urlContains: location.href,
-    };
-
-    const inputs = document.querySelectorAll('input');
-    for (const input of inputs) {
-      const type = input.type || '';
-      const name = input.name || '';
-      const placeholder = (input.placeholder || '').toLowerCase();
-      const id = input.id || '';
-      const autocomplete = input.getAttribute('autocomplete') || '';
-
-      if (name.includes('otp') || name.includes('code') || name.includes('token') ||
-          placeholder.includes('code') || placeholder.includes('verification') || placeholder.includes('digit') ||
-          id.includes('otp') || id.includes('code') || id.includes('verify') ||
-          autocomplete.includes('one-time-code') || autocomplete.includes('otp')) {
-        if (type === 'text' || type === 'number' || type === 'tel' || type === '') {
-          checks.hasCodeInput = true;
+async function clickVisibleButton(page, keywords) {
+  return page.evaluate((kw) => {
+    const btns = document.querySelectorAll('button, a, [role="button"], input[type="submit"]');
+    for (const btn of btns) {
+      const text = (btn.textContent || btn.value || '').toLowerCase().trim();
+      const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+      for (const word of kw) {
+        if (text === word || text.includes(word) || ariaLabel.includes(word)) {
+          const rect = btn.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            btn.click();
+            return text;
+          }
         }
       }
     }
+    return null;
+  }, keywords);
+}
 
+async function findAndType(page, value, fieldType) {
+  const sel = await page.evaluate((ft) => {
+    const inputs = document.querySelectorAll('input, textarea');
+    for (const input of inputs) {
+      const type = (input.type || '').toLowerCase();
+      const name = (input.name || '').toLowerCase();
+      const id = (input.id || '').toLowerCase();
+      const placeholder = (input.placeholder || '').toLowerCase();
+      const autocomplete = (input.getAttribute('autocomplete') || '').toLowerCase();
+      const ariaLabel = (input.getAttribute('aria-label') || '').toLowerCase();
+
+      if (ft === 'password') {
+        if (type === 'password' || name.includes('password') || id.includes('password') || placeholder.includes('password')) {
+          return input.id ? `#${input.id}` : input.name ? `input[name="${input.name}"]` : `input[type="password"]`;
+        }
+        continue;
+      }
+
+      if (ft === 'username') {
+        if (type === 'hidden' || type === 'submit' || type === 'password') continue;
+        if (name.includes('username') || name.includes('account') || name.includes('identifier') || name.includes('text') ||
+            id.includes('username') || id.includes('account') || id.includes('identifier') || id.includes('text') ||
+            placeholder.includes('username') || placeholder.includes('email') || placeholder.includes('phone') ||
+            autocomplete.includes('username') || autocomplete.includes('email') ||
+            ariaLabel.includes('username') || ariaLabel.includes('email') || ariaLabel.includes('phone')) {
+          return input.id ? `#${input.id}` : input.name ? `input[name="${input.name}"]` : `input[type="${input.type || 'text'}"]`;
+        }
+      }
+
+      if (ft === 'code') {
+        if (type === 'hidden' || type === 'submit' || type === 'password') continue;
+        if (name.includes('code') || name.includes('otp') || name.includes('token') || name.includes('verification') ||
+            id.includes('code') || id.includes('otp') || id.includes('token') || id.includes('verification') ||
+            placeholder.includes('code') || placeholder.includes('verification') || placeholder.includes('digit') ||
+            autocomplete.includes('one-time-code') || autocomplete.includes('otp')) {
+          return input.id ? `#${input.id}` : input.name ? `input[name="${input.name}"]` : `input[type="${input.type || 'text'}"]`;
+        }
+      }
+    }
+    return null;
+  }, fieldType);
+
+  if (!sel) return false;
+
+  await page.click(sel, { clickCount: 3 });
+  await randomDelay(100, 300);
+  await page.type(sel, value, { delay: 40 + Math.random() * 80 });
+  return true;
+}
+
+async function isOnPasswordPage(page) {
+  const check = await page.evaluate(() => {
+    const pwInputs = document.querySelectorAll('input[type="password"]');
+    if (pwInputs.length === 0) return false;
     const text = document.body.innerText.toLowerCase();
-    checks.pageText = text;
-    checks.hasOtpInput = text.includes('verification code') || text.includes('two-factor') ||
-                         text.includes('2fa') || text.includes('authenticate') ||
-                         text.includes('security code') || text.includes('enter code') ||
-                         text.includes('otp') || text.includes('confirm your identity') ||
-                         text.includes('protect your account');
-
-    return checks;
+    return text.includes('password') || text.includes('pass');
   });
+  return check;
+}
 
-  return otpIndicators;
+async function isOtpPage(page) {
+  return page.evaluate(() => {
+    const text = document.body.innerText.toLowerCase();
+    const hasCodeInput = Array.from(document.querySelectorAll('input')).some(input => {
+      const type = input.type || '';
+      const name = input.name || '';
+      const id = input.id || '';
+      const placeholder = (input.placeholder || '').toLowerCase();
+      return (name.includes('code') || name.includes('otp') || name.includes('token') || name.includes('verification') ||
+              id.includes('code') || id.includes('otp') || id.includes('token') || id.includes('verification') ||
+              placeholder.includes('code') || placeholder.includes('verification') || placeholder.includes('digit')) &&
+             (type !== 'hidden' && type !== 'submit' && type !== 'password');
+    });
+
+    const hasOtpText = text.includes('verification code') || text.includes('two-factor') ||
+                       text.includes('2fa') || text.includes('authenticate') ||
+                       text.includes('security code') || text.includes('enter code') ||
+                       text.includes('confirm your identity') || text.includes('protect your account');
+
+    return hasCodeInput || hasOtpText;
+  });
 }
 
 async function getLoginError(page) {
   return page.evaluate(() => {
-    const selectors = [
-      '.error-msg', '.alert-danger', '[data-testid="error-message"]',
-      '.form-error', '.notification-error', '.error-text',
-      '.login-error', '.auth-error', '[role="alert"]'
-    ];
+    const selectors = ['.error-msg', '.alert-danger', '[data-testid="error-message"]', '.form-error', '.notification-error', '.error-text', '.login-error', '[role="alert"]', '.text-error'];
     for (const sel of selectors) {
       const el = document.querySelector(sel);
       if (el && el.textContent.trim()) return el.textContent.trim();
     }
-
     const text = document.body.innerText.toLowerCase();
     if (text.includes('incorrect password')) return 'Incorrect username or password';
     if (text.includes('account locked')) return 'Account is locked';
     if (text.includes('account suspended')) return 'Account is suspended';
     if (text.includes('rate limited') || text.includes('too many attempts')) return 'Too many attempts. Try again later.';
-    if (text.includes('invalid username')) return 'Invalid username';
+    if (text.includes('invalid username') || text.includes('invalid email')) return 'Invalid username or email';
     if (text.includes('wrong password')) return 'Wrong password';
-
+    if (text.includes('user not found')) return 'User not found';
     return null;
   });
 }
@@ -133,126 +212,28 @@ app.post('/api/login', async (req, res) => {
     const page = await browser.newPage();
     await humanizePage(page);
 
-    await page.goto('https://accounts.snapchat.com/accounts/login', {
+    await page.goto('https://accounts.snapchat.com/v2/login', {
       waitUntil: 'networkidle2',
       timeout: 30000,
     });
 
     await randomDelay(2000, 3500);
+    await acceptCookies(page);
 
-    const pageContent = await page.content();
-    const hasLoginForm = pageContent.includes('password') || pageContent.includes('login') || pageContent.includes('username');
-    if (!hasLoginForm) {
-      await randomDelay(3000, 5000);
-    }
-
-    const findInputs = await page.evaluate(() => {
-      const allInputs = Array.from(document.querySelectorAll('input, textarea'));
-      let userIdx = -1;
-      let passIdx = -1;
-      let userEl = null;
-      let passEl = null;
-
-      for (let i = 0; i < allInputs.length; i++) {
-        const input = allInputs[i];
-        const type = input.type || '';
-        const tag = input.tagName.toLowerCase();
-
-        if (type === 'password') {
-          passIdx = i;
-          passEl = input;
-          continue;
-        }
-        if (type === 'hidden' || type === 'submit') continue;
-
-        if (userIdx === -1 && (type === 'text' || type === 'email' || type === 'tel' || tag === 'textarea')) {
-          userIdx = i;
-          userEl = input;
-        }
-      }
-
-      const userPath = userEl ? {
-        tag: userEl.tagName.toLowerCase(),
-        name: userEl.name || '',
-        id: userEl.id || '',
-        type: userEl.type || '',
-        placeholder: userEl.placeholder || '',
-        className: userEl.className || '',
-      } : null;
-
-      const passPath = passEl ? {
-        tag: passEl.tagName.toLowerCase(),
-        name: passEl.name || '',
-        id: passEl.id || '',
-        type: passEl.type || '',
-        className: passEl.className || '',
-      } : null;
-
-      return { userPath, passPath };
-    });
-
-    if (!findInputs.userPath || !findInputs.passPath) {
+    const typedUsername = await findAndType(page, username, 'username');
+    if (!typedUsername) {
       await browser.close();
-      return res.json({ success: false, error: 'Could not find login form inputs on the Snapchat page.' });
+      return res.json({ success: false, error: 'Could not find username input on Snapchat login page.' });
     }
 
-    const buildSelector = (info) => {
-      if (info.id) return `${info.tag}#${info.id}`;
-      if (info.name) return `${info.tag}[name="${info.name}"]`;
-      if (info.placeholder) return `${info.tag}[placeholder="${info.placeholder}"]`;
-      return `${info.tag}[type="${info.type}"]`;
-    };
+    await randomDelay(500, 1000);
 
-    const userSelector = buildSelector(findInputs.userPath);
-    const passSelector = buildSelector(findInputs.passPath);
-
-    await randomDelay(300, 600);
-
-    await page.click(userSelector, { clickCount: 3 });
-    await randomDelay(200, 400);
-    await page.type(userSelector, username, { delay: 60 + Math.random() * 100 });
-
-    await randomDelay(400, 800);
-
-    await page.click(passSelector, { clickCount: 3 });
-    await randomDelay(200, 400);
-    await page.type(passSelector, password, { delay: 60 + Math.random() * 100 });
-
-    await randomDelay(300, 600);
-
-    const loginBtnSelectors = [
-      'button[type="submit"]',
-      'button[class*="primary"]',
-      'button[class*="login"]',
-      'button[class*="submit"]',
-      'button[class*="register"]',
-      'button:not([type="button"])',
-      'button',
-      'input[type="submit"]',
-    ];
-
-    let loginBtn = null;
-    for (const sel of loginBtnSelectors) {
-      const btn = await page.$(sel);
-      if (btn) {
-        const isVisible = await btn.evaluate(el => {
-          const rect = el.getBoundingClientRect();
-          return rect.width > 0 && rect.height > 0;
-        });
-        if (isVisible) {
-          loginBtn = btn;
-          break;
-        }
-      }
-    }
-
-    if (loginBtn) {
-      await loginBtn.click();
-    } else {
+    const clickedNext = await clickVisibleButton(page, ['next', 'continue', 'log in', 'login', 'sign in', 'signin', 'submit', 'arrow_forward', 'arrow', 'go']);
+    if (!clickedNext) {
       await page.keyboard.press('Enter');
     }
 
-    await randomDelay(5000, 8000);
+    await randomDelay(4000, 6000);
 
     const currentUrl = page.url();
 
@@ -261,9 +242,51 @@ app.post('/api/login', async (req, res) => {
       return res.json({ success: true, message: 'Login successful!', displayName: username });
     }
 
-    const otpIndicators = await isOtpPage(page);
+    const onPasswordPage = await isOnPasswordPage(page);
 
-    if (otpIndicators.hasCodeInput || otpIndicators.hasOtpInput) {
+    if (!onPasswordPage && !currentUrl.includes('login') && !currentUrl.includes('accounts')) {
+      await browser.close();
+      return res.json({ success: true, message: 'Login successful!', displayName: username });
+    }
+
+    if (!onPasswordPage) {
+      const errorText = await getLoginError(page);
+      await browser.close();
+      return res.json({ success: false, error: errorText || 'Login failed after username step.' });
+    }
+
+    await acceptCookies(page);
+
+    const typedPassword = await findAndType(page, password, 'password');
+    if (!typedPassword) {
+      await browser.close();
+      return res.json({ success: false, error: 'Could not find password input on Snapchat page.' });
+    }
+
+    await randomDelay(500, 1000);
+
+    const clickedLogin = await clickVisibleButton(page, ['log in', 'login', 'sign in', 'signin', 'submit', 'continue', 'next', 'done', 'go']);
+    if (!clickedLogin) {
+      await page.keyboard.press('Enter');
+    }
+
+    await randomDelay(6000, 9000);
+
+    const finalUrl = page.url();
+
+    if (finalUrl.includes('web.snapchat.com') || finalUrl.includes('/accounts/welcome') || finalUrl.includes('/accounts/home')) {
+      await browser.close();
+      return res.json({ success: true, message: 'Login successful!', displayName: username });
+    }
+
+    if (!finalUrl.includes('login') && !finalUrl.includes('accounts')) {
+      await browser.close();
+      return res.json({ success: true, message: 'Login successful!', displayName: username });
+    }
+
+    const otpDetected = await isOtpPage(page);
+
+    if (otpDetected) {
       const sessionId = ++sessionCounter;
       sessions.set(sessionId, { browser, page, username });
 
@@ -283,18 +306,9 @@ app.post('/api/login', async (req, res) => {
       });
     }
 
-    if (currentUrl.includes('accounts.snapchat.com/accounts/login')) {
-      const errorText = await getLoginError(page);
-      await browser.close();
-
-      if (errorText) {
-        return res.json({ success: false, error: errorText });
-      }
-      return res.json({ success: false, error: 'Login failed. Check your username and password.' });
-    }
-
+    const errorText = await getLoginError(page);
     await browser.close();
-    return res.json({ success: false, error: 'Unexpected page: ' + currentUrl });
+    return res.json({ success: false, error: errorText || 'Login failed. Check your credentials.' });
 
   } catch (err) {
     if (browser) await browser.close().catch(() => {});
@@ -310,70 +324,43 @@ app.post('/api/verify', async (req, res) => {
 
   const session = sessions.get(parseInt(sessionId));
   if (!session) {
-    return res.json({ success: false, error: 'Session expired or not found. Please login again.' });
+    return res.json({ success: false, error: 'Session expired. Please login again.' });
   }
 
   try {
     const { browser, page, username } = session;
 
-    const codeInput = await page.evaluateHandle((verificationCode) => {
-      const inputs = document.querySelectorAll('input');
-      for (const input of inputs) {
-        const name = input.name || '';
-        const placeholder = (input.placeholder || '').toLowerCase();
-        const id = input.id || '';
-        const type = input.type || '';
-
-        if (name.includes('otp') || name.includes('code') || name.includes('token') ||
-            placeholder.includes('code') || placeholder.includes('verification') ||
-            id.includes('otp') || id.includes('code') || id.includes('verify')) {
-          if (type === 'text' || type === 'number' || type === 'tel' || type === '') {
-            input.value = '';
-            input.focus();
-            return input;
+    const typedCode = await findAndType(page, code, 'code');
+    if (!typedCode) {
+      const codeSelector = await page.evaluate(() => {
+        const inputs = document.querySelectorAll('input[type="text"], input[type="number"], input[type="tel"], input:not([type])');
+        for (const input of inputs) {
+          if (input.type !== 'hidden' && input.type !== 'submit' && input.type !== 'password') {
+            return input.id ? `#${input.id}` : `input[type="${input.type || 'text'}"]`;
           }
         }
+        return null;
+      });
+
+      if (!codeSelector) {
+        sessions.delete(parseInt(sessionId));
+        await browser.close();
+        return res.json({ success: false, error: 'Could not find verification code input.' });
       }
 
-      for (const input of inputs) {
-        if (input.type === 'text' || input.type === 'number' || input.type === 'tel' || input.type === '') {
-          const label = document.querySelector(`label[for="${input.id}"]`);
-          if (label) {
-            const labelText = label.textContent.toLowerCase();
-            if (labelText.includes('code') || labelText.includes('verification') || labelText.includes('otp')) {
-              input.value = '';
-              input.focus();
-              return input;
-            }
-          }
-        }
-      }
-
-      return null;
-    }, code);
-
-    const inputElement = codeInput.asElement();
-    await codeInput.dispose();
-
-    if (!inputElement) {
-      sessions.delete(parseInt(sessionId));
-      await browser.close();
-      return res.json({ success: false, error: 'Could not find verification code input on the page.' });
+      await page.click(codeSelector, { clickCount: 3 });
+      await randomDelay(100, 300);
+      await page.type(codeSelector, code, { delay: 80 + Math.random() * 100 });
     }
-
-    await randomDelay(200, 500);
-    await inputElement.type(code, { delay: 80 + Math.random() * 100 });
 
     await randomDelay(400, 700);
 
-    const submitBtn = await page.$('button[type="submit"], button[class*="primary"], button[class*="submit"], button[class*="verify"]');
-    if (submitBtn) {
-      await submitBtn.click();
-    } else {
+    const clickedSubmit = await clickVisibleButton(page, ['submit', 'verify', 'continue', 'next', 'confirm', 'done', 'log in', 'login', 'go']);
+    if (!clickedSubmit) {
       await page.keyboard.press('Enter');
     }
 
-    await randomDelay(6000, 9000);
+    await randomDelay(7000, 10000);
 
     const currentUrl = page.url();
 
@@ -381,16 +368,16 @@ app.post('/api/verify', async (req, res) => {
 
     if (currentUrl.includes('web.snapchat.com') || currentUrl.includes('/accounts/welcome') || currentUrl.includes('/accounts/home')) {
       await browser.close();
-      return res.json({ success: true, message: 'Login successful! Verification code accepted.', displayName: username });
+      return res.json({ success: true, message: 'Login successful! Code accepted.', displayName: username });
     }
 
-    if (!currentUrl.includes('login')) {
+    if (!currentUrl.includes('login') && !currentUrl.includes('accounts')) {
       await browser.close();
       return res.json({ success: true, message: 'Login appears successful!', displayName: username });
     }
 
     const otpStillThere = await isOtpPage(page);
-    if (otpStillThere.hasCodeInput || otpStillThere.hasOtpInput) {
+    if (otpStillThere) {
       const newSessionId = ++sessionCounter;
       sessions.set(newSessionId, { browser, page, username });
 
@@ -406,18 +393,13 @@ app.post('/api/verify', async (req, res) => {
         success: false,
         needsVerification: true,
         sessionId: newSessionId,
-        error: 'Invalid or expired code. Please try again with the correct code.',
+        error: 'Invalid or expired code. Try again.',
       });
     }
 
     const errorText = await getLoginError(page);
     await browser.close();
-
-    if (errorText) {
-      return res.json({ success: false, error: errorText });
-    }
-
-    return res.json({ success: false, error: 'Verification failed. The code may be incorrect or expired.' });
+    return res.json({ success: false, error: errorText || 'Verification failed. Code may be incorrect.' });
 
   } catch (err) {
     sessions.delete(parseInt(sessionId));
